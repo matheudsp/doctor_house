@@ -1,29 +1,30 @@
-import { type NextRequest, NextResponse } from "next/server"
+import { type NextRequest, NextResponse } from "next/server";
+import { aimlapi, type ChatMessage } from "@/lib/aimlapi";
 
-// Modo de simulação - não depende da API OpenAI
-const SIMULATION_MODE = true
+// Opção para desabilitar a simulação e usar a API real
+const SIMULATION_MODE = false;
 
 export async function POST(req: NextRequest) {
   try {
     // Parse request body safely
-    let body
+    let body;
     try {
-      body = await req.json()
+      body = await req.json();
     } catch (parseError) {
-      console.error("Erro ao analisar o corpo da requisição:", parseError)
-      return NextResponse.json({ error: "Formato de requisição inválido" }, { status: 400 })
+      console.error("Erro ao analisar o corpo da requisição:", parseError);
+      return NextResponse.json({ error: "Formato de requisição inválido" }, { status: 400 });
     }
 
-    const { conversation, consultaId } = body
+    const { conversation, consultaId } = body;
 
     if (!conversation || !Array.isArray(conversation)) {
-      return NextResponse.json({ error: "Formato de conversa inválido" }, { status: 400 })
+      return NextResponse.json({ error: "Formato de conversa inválido" }, { status: 400 });
     }
 
-    // Usar modo de simulação para evitar chamadas à API OpenAI
+    // Usar modo de simulação para desenvolvimento rápido
     if (SIMULATION_MODE) {
       // Simular um pequeno atraso para parecer mais realista
-      await new Promise((resolve) => setTimeout(resolve, 1000))
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Diagnóstico simulado
       const mockDiagnostico = {
@@ -85,40 +86,60 @@ export async function POST(req: NextRequest) {
           "Radiografia de tórax se houver suspeita de comprometimento pulmonar",
         ],
         simulation: true,
-      }
+      };
 
-      return NextResponse.json(mockDiagnostico)
+      return NextResponse.json(mockDiagnostico);
     }
 
-    // Se não estiver em modo de simulação, retornar um diagnóstico padrão
-    // para evitar erros com a API OpenAI
-    return NextResponse.json({
-      diagnosticoPrincipal: {
-        nome: "Diagnóstico Simulado",
-        descricao: "Este é um diagnóstico simulado. O sistema está em manutenção no momento.",
-      },
-      diagnosticosDiferenciais: [
-        {
-          nome: "Simulação",
-          probabilidade: 100,
-          descricao: "Diagnóstico simulado para fins de demonstração.",
+    // Usar a API AIMLAPI para obter diagnóstico
+    try {
+      // Formatar mensagens para o formato esperado pela API
+      const formattedMessages: ChatMessage[] = conversation.map((msg: any) => ({
+        role: msg.role,
+        content: msg.content,
+      }));
+
+      // Chamar método específico para análise médica
+      const diagnostico = await aimlapi.analyzeMedicalConversation(formattedMessages);
+
+      return NextResponse.json({
+        ...diagnostico,
+        simulation: false,
+      });
+    } catch (apiError) {
+      console.error("Erro na análise diagnóstica via API AIMLAPI:", apiError);
+      
+      // Fallback para diagnóstico simulado em caso de erro na API
+      return NextResponse.json({
+        diagnosticoPrincipal: {
+          nome: "Erro na Análise Diagnóstica",
+          descricao: "Não foi possível processar o diagnóstico. Por favor, tente novamente ou revise as informações fornecidas.",
         },
-      ],
-      evidencias: {
-        sintomas: ["Simulado"],
-        exameFisico: ["Simulado"],
-        examesComplementares: [],
-      },
-      recomendacoes: {
-        tratamentoFarmacologico: ["Simulado"],
-        tratamentoNaoFarmacologico: ["Simulado"],
-        acompanhamento: ["Simulado"],
-      },
-      examesAdicionais: ["Simulado"],
-      simulation: true,
-    })
+        diagnosticosDiferenciais: [
+          {
+            nome: "Problema de Conexão",
+            probabilidade: 95,
+            descricao: "Houve um problema na comunicação com o serviço de análise diagnóstica.",
+          },
+        ],
+        evidencias: {
+          sintomas: ["Error", "API Error"],
+          exameFisico: [],
+          examesComplementares: [],
+        },
+        recomendacoes: {
+          tratamentoFarmacologico: [],
+          tratamentoNaoFarmacologico: ["Tente novamente a análise"],
+          acompanhamento: ["Consulte um médico presencialmente"],
+        },
+        examesAdicionais: [],
+        simulation: true,
+        error: true,
+        errorMessage: apiError instanceof Error ? apiError.message : "Erro na análise diagnóstica",
+      });
+    }
   } catch (error) {
-    console.error("Erro ao gerar diagnóstico:", error)
+    console.error("Erro ao gerar diagnóstico:", error);
 
     // Mesmo em caso de erro, retornar um JSON válido
     return NextResponse.json(
@@ -149,6 +170,6 @@ export async function POST(req: NextRequest) {
         errorMessage: error instanceof Error ? error.message : "Erro desconhecido",
       },
       { status: 200 },
-    ) // Usar status 200 para garantir que o cliente receba um JSON válido
+    ); // Usar status 200 para garantir que o cliente receba um JSON válido
   }
 }
