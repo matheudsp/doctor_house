@@ -16,26 +16,72 @@ interface ChatMessage {
 interface ChatInterfaceProps {
   onDiagnosticoCompleto?: (diagnostico: any) => void;
   consultaId?: number;
+  initialMessages?: ChatMessage[];
 }
 
-export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "system",
-      content:
-        "Você é um assistente médico especializado em diagnósticos. Sua função é fazer perguntas relevantes para ajudar a estabelecer um diagnóstico preciso. Faça perguntas específicas, uma por vez, para elucidar o quadro clínico.",
-    },
-    {
-      role: "assistant",
-      content:
-        "Olá, sou seu assistente de diagnóstico médico. Por favor, descreva os sintomas e queixas principais do paciente para que eu possa ajudar no diagnóstico.",
-      category: "question",
-    },
-  ]);
+export function ChatInterface({ 
+  onDiagnosticoCompleto, 
+  consultaId, 
+  initialMessages 
+}: ChatInterfaceProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    initialMessages || [
+      {
+        role: "system",
+        content:
+          "Você é um assistente médico especializado em diagnósticos. Sua função é fazer perguntas relevantes para ajudar a estabelecer um diagnóstico preciso. Faça perguntas específicas, uma por vez, para elucidar o quadro clínico.",
+      },
+      {
+        role: "assistant",
+        content:
+          "Olá, sou seu assistente de diagnóstico médico. Por favor, descreva os sintomas e queixas principais do paciente para que eu possa ajudar no diagnóstico.",
+        category: "question",
+      },
+    ]
+  );
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isGeneratingDiagnosis, setIsGeneratingDiagnosis] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  // Carregar mensagens da consulta se consultaId for fornecido
+  useEffect(() => {
+    if (consultaId) {
+      fetchMessages();
+    }
+  }, [consultaId]);
+
+  // Buscar mensagens da consulta
+  const fetchMessages = async () => {
+    if (!consultaId) return;
+    
+    try {
+      const response = await fetch(`/api/consultas/${consultaId}/mensagens`);
+      if (!response.ok) throw new Error("Falha ao carregar mensagens");
+      
+      const data = await response.json();
+      if (data.length > 0) {
+        // Adicionar mensagem de sistema se não existir
+        const hasSystemMessage = data.some((msg: ChatMessage) => msg.role === "system");
+        if (!hasSystemMessage) {
+          data.unshift({
+            role: "system",
+            content:
+              "Você é um assistente médico especializado em diagnósticos. Sua função é fazer perguntas relevantes para ajudar a estabelecer um diagnóstico preciso. Faça perguntas específicas, uma por vez, para elucidar o quadro clínico.",
+          });
+        }
+        setMessages(data);
+      }
+    } catch (error) {
+      console.error("Erro ao carregar mensagens:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar o histórico de mensagens",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Rolar para o final das mensagens quando uma nova mensagem é adicionada
   useEffect(() => {
@@ -65,7 +111,7 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
 
   // Enviar mensagem para a API de chat
   const handleSubmit = async () => {
-    if (!inputMessage.trim()) return;
+    if (!inputMessage.trim() || isLoading) return;
 
     // Adicionar mensagem do usuário ao estado
     const userMessage: ChatMessage = {
@@ -95,11 +141,12 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
         }),
       });
 
-      const data = await response.json();
-
-      if (data.error) {
-        throw new Error(data.errorMessage || "Erro ao processar mensagem");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.errorMessage || "Erro ao processar mensagem");
       }
+
+      const data = await response.json();
 
       // Adicionar resposta do assistente ao estado
       const assistantMessage: ChatMessage = {
@@ -133,9 +180,9 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
 
   // Gerar diagnóstico completo
   const handleGenerateDiagnosis = async () => {
-    if (!onDiagnosticoCompleto) return;
+    if (!onDiagnosticoCompleto || isGeneratingDiagnosis) return;
 
-    setIsLoading(true);
+    setIsGeneratingDiagnosis(true);
 
     try {
       const response = await fetch("/api/diagnostico", {
@@ -149,6 +196,11 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
         }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.errorMessage || "Erro ao gerar diagnóstico");
+      }
+
       const diagnostico = await response.json();
 
       if (diagnostico.error) {
@@ -157,6 +209,21 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
 
       // Notificar componente pai sobre o diagnóstico completo
       onDiagnosticoCompleto(diagnostico);
+      
+      // Se houver consultaId, atualizar status da consulta
+      if (consultaId) {
+        await fetch(`/api/consultas/${consultaId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            diagnostico_principal: diagnostico.diagnosticoPrincipal.nome,
+            diagnosticos_diferenciais: diagnostico.diagnosticosDiferenciais,
+            recomendacoes: diagnostico.recomendacoes,
+          }),
+        });
+      }
     } catch (error) {
       console.error("Erro ao gerar diagnóstico:", error);
       toast({
@@ -165,9 +232,12 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
         variant: "destructive",
       });
     } finally {
-      setIsLoading(false);
+      setIsGeneratingDiagnosis(false);
     }
   };
+
+  // Verificar se tem mensagens suficientes para gerar diagnóstico
+  const hasSufficientMessages = messages.filter(m => m.role === "user").length >= 3;
 
   return (
     <div className="flex flex-col h-full">
@@ -210,11 +280,11 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
                 if (!isLoading) handleSubmit();
               }
             }}
-            disabled={isLoading}
+            disabled={isLoading || isGeneratingDiagnosis}
           />
           <Button
             onClick={handleSubmit}
-            disabled={isLoading || !inputMessage.trim()}
+            disabled={isLoading || isGeneratingDiagnosis || !inputMessage.trim()}
             className="self-end"
           >
             {isLoading ? (
@@ -231,9 +301,13 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
             size="sm"
             className="text-xs flex items-center gap-1"
             onClick={handleGenerateDiagnosis}
-            disabled={isLoading || messages.filter((m) => m.role === "user").length < 3}
+            disabled={isLoading || isGeneratingDiagnosis || !hasSufficientMessages}
           >
-            <SparklesIcon className="h-3 w-3" />
+            {isGeneratingDiagnosis ? (
+              <Loader2Icon className="h-3 w-3 animate-spin" />
+            ) : (
+              <SparklesIcon className="h-3 w-3" />
+            )}
             Gerar Diagnóstico
           </Button>
         </div>
