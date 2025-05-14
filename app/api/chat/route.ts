@@ -1,16 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { aimlapi, type ChatMessage } from "@/lib/aimlapi";
 
-// Opção para desabilitar a simulação e usar a API real
-const SIMULATION_MODE = false;
-
-// Respostas simuladas para desenvolvimento (ainda mantidas para fallback)
-const simulatedResponses = [
-  "Entendo. Poderia me dizer mais sobre quando esses sintomas começaram e se há algum fator que os piora ou melhora?",
-  "Com base nos sintomas descritos, estou considerando algumas possibilidades. Você tem histórico de alergias ou problemas respiratórios?",
-  "Obrigado pelas informações. Você mencionou febre - poderia me dizer qual a temperatura máxima registrada e há quanto tempo está com febre?",
-  "Entendo. Considerando os sintomas apresentados, os principais diagnósticos diferenciais incluem infecção viral respiratória, sinusite bacteriana e reação alérgica. Vamos discutir cada um deles e o tratamento recomendado.",
-];
 
 // Contador para alternar entre respostas simuladas
 let responseIndex = 0;
@@ -31,26 +21,6 @@ export async function POST(req: NextRequest) {
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: "Formato de mensagens inválido" }, { status: 400 });
     }
-
-    // Usar modo de simulação para desenvolvimento rápido
-    if (SIMULATION_MODE) {
-      // Obter a próxima resposta simulada e incrementar o índice
-      const response = simulatedResponses[responseIndex];
-      responseIndex = (responseIndex + 1) % simulatedResponses.length;
-
-      // Determinar a categoria da resposta
-      const category = responseIndex === 3 ? "diagnosis" : "question";
-
-      // Simular um pequeno atraso para parecer mais realista
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      return NextResponse.json({
-        response,
-        category,
-        simulation: true,
-      });
-    }
-
     // Usar a API AIMLAPI
     try {
       // Formatar mensagens para o formato esperado pela API AIMLAPI
@@ -95,14 +65,10 @@ export async function POST(req: NextRequest) {
     } catch (apiError) {
       console.error("Erro na chamada à API AIMLAPI:", apiError);
       
-      // Fallback para respostas simuladas em caso de erro na API
-      const response = simulatedResponses[responseIndex];
-      responseIndex = (responseIndex + 1) % simulatedResponses.length;
+     
       
       return NextResponse.json({
-        response,
         category: "question",
-        simulation: true,
         error: true,
         errorMessage: apiError instanceof Error ? apiError.message : "Erro na comunicação com a API",
       });
