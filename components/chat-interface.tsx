@@ -6,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { SendIcon, SparklesIcon, Loader2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DiagnosticResponse } from "@/lib/aimlapi";
+import { DiagnosticoAI } from "@/components/diagnostico-ai";
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -14,7 +16,7 @@ interface ChatMessage {
 }
 
 interface ChatInterfaceProps {
-  onDiagnosticoCompleto?: (diagnostico: any) => void;
+  onDiagnosticoCompleto?: (diagnostico: DiagnosticResponse) => void;
   consultaId?: number;
 }
 
@@ -34,6 +36,8 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
   ]);
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [diagnostico, setDiagnostico] = useState<DiagnosticResponse | null>(null);
+  const [mostrarDiagnostico, setMostrarDiagnostico] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -133,8 +137,6 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
 
   // Gerar diagnóstico completo
   const handleGenerateDiagnosis = async () => {
-    if (!onDiagnosticoCompleto) return;
-
     setIsLoading(true);
 
     try {
@@ -149,14 +151,20 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
         }),
       });
 
-      const diagnostico = await response.json();
+      const resultadoDiagnostico = await response.json();
 
-      if (diagnostico.error) {
-        throw new Error(diagnostico.errorMessage || "Erro ao gerar diagnóstico");
+      if (resultadoDiagnostico.error) {
+        throw new Error(resultadoDiagnostico.errorMessage || "Erro ao gerar diagnóstico");
       }
 
+      // Atualizar estado local com o diagnóstico
+      setDiagnostico(resultadoDiagnostico);
+      setMostrarDiagnostico(true);
+
       // Notificar componente pai sobre o diagnóstico completo
-      onDiagnosticoCompleto(diagnostico);
+      if (onDiagnosticoCompleto) {
+        onDiagnosticoCompleto(resultadoDiagnostico);
+      }
     } catch (error) {
       console.error("Erro ao gerar diagnóstico:", error);
       toast({
@@ -169,33 +177,76 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
     }
   };
 
+  const handleDiagnosticoFeedback = async (feedback: "concordo" | "discordo") => {
+    if (!consultaId || !diagnostico) return;
+
+    try {
+      await fetch(`/api/consultas/${consultaId}/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          feedback,
+          diagnosticoId: diagnostico.diagnosticoPrincipal.nome,
+        }),
+      });
+
+      toast({
+        title: "Feedback enviado",
+        description: "Obrigado por avaliar o diagnóstico!",
+      });
+    } catch (error) {
+      console.error("Erro ao enviar feedback:", error);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages
-          .filter((msg) => msg.role !== "system") // Não mostrar mensagens do sistema
-          .map((message, index) => (
-            <div
-              key={index}
-              className={cn(
-                "flex",
-                message.role === "user" ? "justify-end" : "justify-start"
-              )}
+      {/* Exibir o diagnóstico se estiver disponível e o usuário clicou em "Gerar Diagnóstico" */}
+      {mostrarDiagnostico && diagnostico ? (
+        <div className="flex-1 overflow-y-auto p-4">
+          <DiagnosticoAI 
+            diagnostico={diagnostico} 
+            onFeedback={handleDiagnosticoFeedback}
+          />
+          <div className="mt-4 flex justify-center">
+            <Button
+              variant="outline"
+              onClick={() => setMostrarDiagnostico(false)}
             >
+              Voltar ao Chat
+            </Button>
+          </div>
+        </div>
+      ) : (
+        // Interface de chat
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages
+            .filter((msg) => msg.role !== "system") // Não mostrar mensagens do sistema
+            .map((message, index) => (
               <div
+                key={index}
                 className={cn(
-                  "max-w-[80%] rounded-lg px-4 py-2",
-                  message.role === "user"
-                    ? "bg-blue-500 text-white"
-                    : "bg-gray-100 dark:bg-gray-800"
+                  "flex",
+                  message.role === "user" ? "justify-end" : "justify-start"
                 )}
               >
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <div
+                  className={cn(
+                    "max-w-[80%] rounded-lg px-4 py-2",
+                    message.role === "user"
+                      ? "bg-blue-500 text-white"
+                      : "bg-gray-100 dark:bg-gray-800"
+                  )}
+                >
+                  <p className="whitespace-pre-wrap">{message.content}</p>
+                </div>
               </div>
-            </div>
-          ))}
-        <div ref={messagesEndRef} />
-      </div>
+            ))}
+          <div ref={messagesEndRef} />
+        </div>
+      )}
 
       <div className="border-t p-4">
         <div className="flex space-x-2">
@@ -210,11 +261,11 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
                 if (!isLoading) handleSubmit();
               }
             }}
-            disabled={isLoading}
+            disabled={isLoading || mostrarDiagnostico}
           />
           <Button
             onClick={handleSubmit}
-            disabled={isLoading || !inputMessage.trim()}
+            disabled={isLoading || !inputMessage.trim() || mostrarDiagnostico}
             className="self-end"
           >
             {isLoading ? (
@@ -230,11 +281,17 @@ export function ChatInterface({ onDiagnosticoCompleto, consultaId }: ChatInterfa
             variant="outline"
             size="sm"
             className="text-xs flex items-center gap-1"
-            onClick={handleGenerateDiagnosis}
+            onClick={() => {
+              if (diagnostico) {
+                setMostrarDiagnostico(true);
+              } else {
+                handleGenerateDiagnosis();
+              }
+            }}
             disabled={isLoading || messages.filter((m) => m.role === "user").length < 3}
           >
             <SparklesIcon className="h-3 w-3" />
-            Gerar Diagnóstico
+            {diagnostico ? "Ver Diagnóstico" : "Gerar Diagnóstico"}
           </Button>
         </div>
       </div>

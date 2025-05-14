@@ -110,7 +110,7 @@ export class AimlapiClient {
     ];
 
     const response = await this.createChatCompletion({
-      model: "gpt-4o-mini",
+      model: 'gpt-4o-mini-2024-07-18',
       messages,
       temperature: 0.3,
       max_tokens: 2048,
