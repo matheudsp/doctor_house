@@ -1,0 +1,40 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Consulta {
+  id                        Int        @id @default(autoincrement())
+  data_consulta             DateTime   @default(now())
+  status                    String     @default("em_andamento") // "em_andamento" | "concluida" | "arquivada"
+  diagnostico_principal     String?
+  diagnosticos_diferenciais Json?
+  evidencias                Json? // Adicionado para armazenar sintomas, exame físico e complementares
+  recomendacoes             Json?
+  exames_adicionais         Json? // Adicionado para armazenar exames recomendados
+  created_at                DateTime   @default(now())
+  updated_at                DateTime   @updatedAt
+  mensagens                 Mensagem[]
+
+  @@index([status]) // Índice para consultas por status
+}
+
+model Mensagem {
+  id          Int      @id @default(autoincrement())
+  consulta    Consulta @relation(fields: [consulta_id], references: [id], onDelete: Cascade)
+  consulta_id Int
+  role        String // "user" | "assistant" | "system"
+  content     String   @db.Text
+  category    String? // "question" | "diagnosis"
+  timestamp   DateTime @default(now())
+
+  @@index([consulta_id]) // Índice para consultas rápidas de mensagens por consulta
+}

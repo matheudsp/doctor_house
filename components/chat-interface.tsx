@@ -1,80 +1,78 @@
-"use client";
-
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { Avatar } from "@/components/ui/avatar";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Card } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Loader2, Send, RotateCw, UserCircle, Bot } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import { SendIcon, SparklesIcon, Loader2Icon } from "lucide-react";
-import { cn } from "@/lib/utils";
 
-interface ChatMessage {
-  role: "user" | "assistant" | "system";
+type Message = {
+  role: "system" | "user" | "assistant";
   content: string;
-  category?: "question" | "diagnosis";
-}
+  category?: string;
+};
 
-interface ChatInterfaceProps {
-  onDiagnosticoCompleto?: (diagnostico: any) => void;
-  consultaId?: number;
-  initialMessages?: ChatMessage[];
-}
+type Props = {
+  onDiagnosticoCompleto: () => void;
+};
 
-export function ChatInterface({ 
-  onDiagnosticoCompleto, 
-  consultaId, 
-  initialMessages 
-}: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>(
-    initialMessages || [
-      {
-        role: "system",
-        content:
-          "Você é um assistente médico especializado em diagnósticos. Sua função é fazer perguntas relevantes para ajudar a estabelecer um diagnóstico preciso. Faça perguntas específicas, uma por vez, para elucidar o quadro clínico.",
-      },
-      {
-        role: "assistant",
-        content:
-          "Olá, sou seu assistente de diagnóstico médico. Por favor, descreva os sintomas e queixas principais do paciente para que eu possa ajudar no diagnóstico.",
-        category: "question",
-      },
-    ]
-  );
-  const [inputMessage, setInputMessage] = useState("");
+export function ChatInterface({ onDiagnosticoCompleto }: Props) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isGeneratingDiagnosis, setIsGeneratingDiagnosis] = useState(false);
+  const [consultaId, setConsultaId] = useState<number | null>(null);
+  const [isFinalizando, setIsFinalizando] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  // Carregar mensagens da consulta se consultaId for fornecido
+  // Carregar histórico de mensagens quando o componente for montado ou quando consultaId mudar
   useEffect(() => {
     if (consultaId) {
-      fetchMessages();
+      fetchMessageHistory();
+    } else {
+      // Adiciona a mensagem inicial do assistente se não houver consulta ativa
+      setMessages([
+        {
+          role: "assistant",
+          content: "Olá! Sou seu assistente médico. Por favor, descreva os sintomas ou o que está sentindo para que eu possa ajudar no diagnóstico.",
+          category: "question",
+        },
+      ]);
     }
   }, [consultaId]);
 
-  // Buscar mensagens da consulta
-  const fetchMessages = async () => {
+  // Scroll para o final das mensagens quando novas mensagens são adicionadas
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // Buscar histórico de mensagens
+  const fetchMessageHistory = async () => {
     if (!consultaId) return;
-    
+
     try {
-      const response = await fetch(`/api/consultas/${consultaId}/mensagens`);
-      if (!response.ok) throw new Error("Falha ao carregar mensagens");
-      
-      const data = await response.json();
-      if (data.length > 0) {
-        // Adicionar mensagem de sistema se não existir
-        const hasSystemMessage = data.some((msg: ChatMessage) => msg.role === "system");
-        if (!hasSystemMessage) {
-          data.unshift({
-            role: "system",
-            content:
-              "Você é um assistente médico especializado em diagnósticos. Sua função é fazer perguntas relevantes para ajudar a estabelecer um diagnóstico preciso. Faça perguntas específicas, uma por vez, para elucidar o quadro clínico.",
-          });
-        }
-        setMessages(data);
+      const response = await fetch(`/api/chat?consultaId=${consultaId}`);
+      if (!response.ok) {
+        throw new Error(`Erro ao buscar histórico: ${response.statusText}`);
       }
+
+      const data = await response.json();
+      // Converter mensagens do banco para o formato local
+      const historicalMessages: Message[] = data.map((msg: any) => ({
+        role: msg.role as "system" | "user" | "assistant",
+        content: msg.content,
+        category: msg.category,
+      }));
+
+      setMessages(historicalMessages);
     } catch (error) {
-      console.error("Erro ao carregar mensagens:", error);
+      console.error("Erro ao buscar histórico de mensagens:", error);
       toast({
         title: "Erro",
         description: "Não foi possível carregar o histórico de mensagens",
@@ -83,53 +81,21 @@ export function ChatInterface({
     }
   };
 
-  // Rolar para o final das mensagens quando uma nova mensagem é adicionada
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  // Enviar mensagem para a API
+  const sendMessage = async () => {
+    if (!input.trim()) return;
 
-  // Salvar mensagem no banco de dados
-  const saveMessageToDatabase = async (message: ChatMessage) => {
-    if (!consultaId) return;
-
-    try {
-      await fetch(`/api/consultas/${consultaId}/mensagens`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          role: message.role,
-          content: message.content,
-          category: message.category,
-        }),
-      });
-    } catch (error) {
-      console.error("Erro ao salvar mensagem:", error);
-    }
-  };
-
-  // Enviar mensagem para a API de chat
-  const handleSubmit = async () => {
-    if (!inputMessage.trim() || isLoading) return;
-
-    // Adicionar mensagem do usuário ao estado
-    const userMessage: ChatMessage = {
+    const userMessage: Message = {
       role: "user",
-      content: inputMessage,
+      content: input,
     };
 
+    // Adiciona mensagem do usuário à lista
     setMessages((prev) => [...prev, userMessage]);
-    setInputMessage("");
+    setInput("");
     setIsLoading(true);
 
-    // Salvar mensagem do usuário no banco de dados
-    if (consultaId) {
-      await saveMessageToDatabase(userMessage);
-    }
-
     try {
-      // Enviar todas as mensagens para a API para manter o contexto
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -142,47 +108,60 @@ export function ChatInterface({
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.errorMessage || "Erro ao processar mensagem");
+        throw new Error(`Erro na resposta da API: ${response.statusText}`);
       }
 
       const data = await response.json();
 
-      // Adicionar resposta do assistente ao estado
-      const assistantMessage: ChatMessage = {
-        role: "assistant",
-        content: data.response,
-        category: data.category,
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-
-      // Salvar mensagem do assistente no banco de dados
-      if (consultaId) {
-        await saveMessageToDatabase(assistantMessage);
+      // Atualiza o ID da consulta se for uma nova consulta
+      if (data.consultaId && !consultaId) {
+        setConsultaId(data.consultaId);
       }
 
-      // Se a resposta for um diagnóstico, gerar o diagnóstico completo
-      if (data.category === "diagnosis") {
-        await handleGenerateDiagnosis();
-      }
+      // Adiciona resposta do assistente à lista
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: data.response,
+          category: data.category,
+        },
+      ]);
     } catch (error) {
       console.error("Erro ao enviar mensagem:", error);
       toast({
         title: "Erro",
-        description: error instanceof Error ? error.message : "Erro ao processar mensagem",
+        description: "Não foi possível processar sua mensagem",
         variant: "destructive",
       });
+
+      // Adiciona mensagem de erro como resposta do assistente
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.",
+          category: "error",
+        },
+      ]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Gerar diagnóstico completo
-  const handleGenerateDiagnosis = async () => {
-    if (!onDiagnosticoCompleto || isGeneratingDiagnosis) return;
+  // Finalizar consulta e gerar diagnóstico
+  const finalizarConsulta = async () => {
+    if (!consultaId || messages.length < 3) {
+      toast({
+        title: "Aviso",
+        description: "É necessário ter mais interações para gerar um diagnóstico",
+        variant: "default",
+      });
+      return;
+    }
 
-    setIsGeneratingDiagnosis(true);
+    setIsFinalizando(true);
 
     try {
       const response = await fetch("/api/diagnostico", {
@@ -191,126 +170,137 @@ export function ChatInterface({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          conversation: messages,
           consultaId,
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.errorMessage || "Erro ao gerar diagnóstico");
+        throw new Error(`Erro ao gerar diagnóstico: ${response.statusText}`);
       }
 
-      const diagnostico = await response.json();
+      const data = await response.json();
 
-      if (diagnostico.error) {
-        throw new Error(diagnostico.errorMessage || "Erro ao gerar diagnóstico");
-      }
-
-      // Notificar componente pai sobre o diagnóstico completo
-      onDiagnosticoCompleto(diagnostico);
-      
-      // Se houver consultaId, atualizar status da consulta
-      if (consultaId) {
-        await fetch(`/api/consultas/${consultaId}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            diagnostico_principal: diagnostico.diagnosticoPrincipal.nome,
-            diagnosticos_diferenciais: diagnostico.diagnosticosDiferenciais,
-            recomendacoes: diagnostico.recomendacoes,
-          }),
-        });
-      }
-    } catch (error) {
-      console.error("Erro ao gerar diagnóstico:", error);
       toast({
-        title: "Erro no Diagnóstico",
-        description: error instanceof Error ? error.message : "Erro ao gerar diagnóstico completo",
+        title: "Diagnóstico gerado",
+        description: `Diagnóstico principal: ${data.diagnosticoPrincipal.nome}`,
+        variant: "default",
+      });
+
+      // Notifica o componente pai que o diagnóstico está completo
+      onDiagnosticoCompleto();
+    } catch (error) {
+      console.error("Erro ao finalizar consulta:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível gerar o diagnóstico",
         variant: "destructive",
       });
     } finally {
-      setIsGeneratingDiagnosis(false);
+      setIsFinalizando(false);
     }
   };
 
-  // Verificar se tem mensagens suficientes para gerar diagnóstico
-  const hasSufficientMessages = messages.filter(m => m.role === "user").length >= 3;
+  // Lidar com envio do formulário
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendMessage();
+  };
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages
-          .filter((msg) => msg.role !== "system") // Não mostrar mensagens do sistema
-          .map((message, index) => (
+      <ScrollArea className="flex-1 p-4">
+        <div className="space-y-4">
+          {messages.map((message, index) => (
             <div
               key={index}
-              className={cn(
-                "flex",
+              className={`flex ${
                 message.role === "user" ? "justify-end" : "justify-start"
-              )}
+              }`}
             >
               <div
-                className={cn(
-                  "max-w-[80%] rounded-lg px-4 py-2",
-                  message.role === "user"
-                    ? "bg-blue-500 text-white"
-                    : "bg-gray-100 dark:bg-gray-800"
-                )}
+                className={`flex items-start gap-3 max-w-[80%] ${
+                  message.role === "user" ? "flex-row-reverse" : ""
+                }`}
               >
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <Avatar className="h-8 w-8">
+                  {message.role === "user" ? (
+                    <UserCircle className="h-8 w-8" />
+                  ) : (
+                    <Bot className="h-8 w-8" />
+                  )}
+                </Avatar>
+                <Card
+                  className={`p-3 ${
+                    message.role === "user"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted"
+                  }`}
+                >
+                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                </Card>
               </div>
             </div>
           ))}
-        <div ref={messagesEndRef} />
-      </div>
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="flex items-start gap-3 max-w-[80%]">
+                <Avatar className="h-8 w-8">
+                  <Bot className="h-8 w-8" />
+                </Avatar>
+                <Card className="p-3 bg-muted">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </Card>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </ScrollArea>
 
-      <div className="border-t p-4">
-        <div className="flex space-x-2">
+      <div className="p-4 border-t">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Textarea
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            placeholder="Descreva os sintomas ou responda à pergunta..."
-            className="flex-1 resize-none"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                if (!isLoading) handleSubmit();
-              }
-            }}
-            disabled={isLoading || isGeneratingDiagnosis}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Descreva os sintomas ou responda a pergunta do assistente..."
+            disabled={isLoading || isFinalizando}
+            className="resize-none"
+            rows={3}
           />
-          <Button
-            onClick={handleSubmit}
-            disabled={isLoading || isGeneratingDiagnosis || !inputMessage.trim()}
-            className="self-end"
-          >
-            {isLoading ? (
-              <Loader2Icon className="h-4 w-4 animate-spin" />
-            ) : (
-              <SendIcon className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-
-        <div className="flex justify-end mt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs flex items-center gap-1"
-            onClick={handleGenerateDiagnosis}
-            disabled={isLoading || isGeneratingDiagnosis || !hasSufficientMessages}
-          >
-            {isGeneratingDiagnosis ? (
-              <Loader2Icon className="h-3 w-3 animate-spin" />
-            ) : (
-              <SparklesIcon className="h-3 w-3" />
-            )}
-            Gerar Diagnóstico
-          </Button>
-        </div>
+          <div className="flex justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={finalizarConsulta}
+              disabled={isLoading || isFinalizando || !consultaId}
+            >
+              {isFinalizando ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Gerando diagnóstico...
+                </>
+              ) : (
+                <>
+                  <RotateCw className="mr-2 h-4 w-4" />
+                  Gerar diagnóstico
+                </>
+              )}
+            </Button>
+            <Button
+              type="submit"
+              disabled={!input.trim() || isLoading || isFinalizando}
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>
+                  Enviar
+                  <Send className="ml-2 h-4 w-4" />
+                </>
+              )}
+            </Button>
+          </div>
+        </form>
       </div>
     </div>
   );

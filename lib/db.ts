@@ -1,147 +1,250 @@
-import { neon } from "@neondatabase/serverless"
-import { drizzle } from "drizzle-orm/neon-http"
+import { PrismaClient } from "../app/generated/prisma";
+import type { Consulta, Mensagem, Prisma } from "../app/generated/prisma";
+import { type DiagnosticResponse } from "@/lib/aimlapi";
 
-// Inicializa a conexão com o banco de dados Neon
-const sql = neon(process.env.DATABASE_URL!)
-export const db = drizzle(sql)
+// Singleton para o PrismaClient
+const prismaClientSingleton = () => {
+  return new PrismaClient();
+};
 
-// Tipos para as entidades do banco de dados
-export type Paciente = {
-  id: number
-  nome: string
-  data_nascimento?: string
-  sexo?: string
-  email?: string
-  telefone?: string
-  created_at: string
-  updated_at: string
+// Usar globalThis para garantir uma única instância do PrismaClient
+declare global {
+  var prisma: undefined | ReturnType<typeof prismaClientSingleton>;
 }
 
-export type Consulta = {
-  id: number
-  paciente_id: number
-  data_consulta: string
-  status: "em_andamento" | "concluida" | "arquivada"
-  diagnostico_principal?: string
-  diagnosticos_diferenciais?: any
-  recomendacoes?: any
-  created_at: string
-  updated_at: string
-}
+const prisma = globalThis.prisma ?? prismaClientSingleton();
 
-export type Mensagem = {
-  id: number
-  consulta_id: number
-  role: "user" | "assistant" | "system"
-  content: string
-  category?: string
-  timestamp: string
-}
+if (process.env.NODE_ENV !== "production") globalThis.prisma = prisma;
 
-// Funções para manipular pacientes
-export async function getPacientes() {
-  const result = await sql`SELECT * FROM pacientes ORDER BY nome`
-  return result
-}
+// Exportar tipos do Prisma para uso em outros arquivos
+export type { Consulta, Mensagem, Prisma };
 
-export async function getPacienteById(id: number) {
-  const result = await sql`SELECT * FROM pacientes WHERE id = ${id}`
-  return result[0]
-}
-
-export async function createPaciente(paciente: { nome: string }) {
-  // Usar SQL tagged template para evitar problemas de injeção SQL
-  const result = await sql`
-    INSERT INTO pacientes (nome) 
-    VALUES (${paciente.nome}) 
-    RETURNING *
-  `
-  return result[0]
-}
-
-// Funções para manipular consultas
-export async function getConsultasByPacienteId(pacienteId: number) {
-  return sql`
-    SELECT * FROM consultas 
-    WHERE paciente_id = ${pacienteId} 
-    ORDER BY data_consulta DESC
-  `
-}
-
+/**
+ * Recupera uma consulta pelo ID com todas as suas mensagens
+ * @param id ID da consulta
+ * @returns Consulta com mensagens ou null se não encontrada
+ */
 export async function getConsultaById(id: number) {
-  const result = await sql`SELECT * FROM consultas WHERE id = ${id}`
-  return result[0]
+  try {
+    return await prisma.consulta.findUnique({
+      where: { id },
+      include: {
+        mensagens: {
+          orderBy: {
+            timestamp: 'asc'
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Erro ao buscar consulta:", error);
+    throw new Error(`Falha ao buscar consulta: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
 }
 
-export async function createConsulta(consulta: { paciente_id: number }) {
-  const result = await sql`
-    INSERT INTO consultas (paciente_id, status) 
-    VALUES (${consulta.paciente_id}, 'em_andamento') 
-    RETURNING *
-  `
-  return result[0]
+/**
+ * Lista consultas com opções de filtragem por status
+ * @param options Opções de filtragem e paginação
+ * @returns Lista de consultas
+ */
+export async function listConsultas(options?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  try {
+    const { status, limit = 10, offset = 0 } = options || {};
+    
+    return await prisma.consulta.findMany({
+      where: status ? { status } : undefined,
+      include: {
+        _count: {
+          select: { mensagens: true }
+        }
+      },
+      orderBy: {
+        updated_at: 'desc'
+      },
+      take: limit,
+      skip: offset
+    });
+  } catch (error) {
+    console.error("Erro ao listar consultas:", error);
+    throw new Error(`Falha ao listar consultas: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
 }
 
-export async function updateConsulta(id: number, data: Partial<Consulta>) {
-  // Para atualização, precisamos construir a consulta SQL de forma dinâmica
-  // Vamos usar uma abordagem mais simples para este caso específico
-
-  // Verificar se há campos para atualizar
-  if (Object.keys(data).length === 0) {
-    const result = await sql`SELECT * FROM consultas WHERE id = ${id}`
-    return result[0]
+/**
+ * Cria uma nova consulta
+ * @returns Nova consulta criada
+ */
+export async function createConsulta() {
+  try {
+    return await prisma.consulta.create({
+      data: {
+        status: 'em_andamento'
+      }
+    });
+  } catch (error) {
+    console.error("Erro ao criar consulta:", error);
+    throw new Error(`Falha ao criar consulta: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
   }
-
-  // Atualizar campos específicos com base no que foi fornecido
-  if (data.status) {
-    await sql`UPDATE consultas SET status = ${data.status} WHERE id = ${id}`
-  }
-
-  if (data.diagnostico_principal) {
-    await sql`UPDATE consultas SET diagnostico_principal = ${data.diagnostico_principal} WHERE id = ${id}`
-  }
-
-  if (data.diagnosticos_diferenciais) {
-    await sql`UPDATE consultas SET diagnosticos_diferenciais = ${JSON.stringify(data.diagnosticos_diferenciais)}::jsonb WHERE id = ${id}`
-  }
-
-  if (data.recomendacoes) {
-    await sql`UPDATE consultas SET recomendacoes = ${JSON.stringify(data.recomendacoes)}::jsonb WHERE id = ${id}`
-  }
-
-  // Atualizar o timestamp
-  await sql`UPDATE consultas SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`
-
-  // Retornar a consulta atualizada
-  const result = await sql`SELECT * FROM consultas WHERE id = ${id}`
-  return result[0]
 }
 
-// Funções para manipular mensagens
+/**
+ * Atualiza uma consulta existente
+ * @param id ID da consulta
+ * @param data Dados para atualização
+ * @returns Consulta atualizada
+ */
+export async function updateConsulta(
+  id: number, 
+  data: {
+    status?: string;
+    diagnostico_principal?: string;
+    diagnosticos_diferenciais?: any;
+    evidencias?: any;
+    recomendacoes?: any;
+    exames_adicionais?: any;
+  }
+) {
+  try {
+    return await prisma.consulta.update({
+      where: { id },
+      data
+    });
+  } catch (error) {
+    console.error(`Erro ao atualizar consulta ${id}:`, error);
+    throw new Error(`Falha ao atualizar consulta: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
+}
+
+/**
+ * Salva diagnóstico completo baseado na resposta da API
+ * @param consultaId ID da consulta
+ * @param diagnostico Objeto de diagnóstico da API
+ * @returns Consulta atualizada
+ */
+export async function saveDiagnostico(consultaId: number, diagnostico: DiagnosticResponse) {
+  try {
+    return await prisma.consulta.update({
+      where: { id: consultaId },
+      data: {
+        status: 'concluida',
+        diagnostico_principal: diagnostico.diagnosticoPrincipal.nome,
+        diagnosticos_diferenciais: diagnostico.diagnosticosDiferenciais,
+        evidencias: diagnostico.evidencias,
+        recomendacoes: diagnostico.recomendacoes,
+        exames_adicionais: diagnostico.examesAdicionais
+      }
+    });
+  } catch (error) {
+    console.error(`Erro ao salvar diagnóstico para consulta ${consultaId}:`, error);
+    throw new Error(`Falha ao salvar diagnóstico: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
+}
+
+/**
+ * Deleta uma consulta (apenas para fins administrativos)
+ * @param id ID da consulta
+ * @returns Resultado da operação
+ */
+export async function deleteConsulta(id: number) {
+  try {
+    return await prisma.consulta.delete({
+      where: { id }
+    });
+  } catch (error) {
+    console.error(`Erro ao deletar consulta ${id}:`, error);
+    throw new Error(`Falha ao deletar consulta: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
+}
+
+/**
+ * Recupera mensagens de uma consulta
+ * @param consultaId ID da consulta
+ * @returns Lista de mensagens ordenadas por timestamp
+ */
 export async function getMensagensByConsultaId(consultaId: number) {
-  return sql`
-    SELECT * FROM mensagens 
-    WHERE consulta_id = ${consultaId} 
-    ORDER BY timestamp
-  `
+  try {
+    return await prisma.mensagem.findMany({
+      where: {
+        consulta_id: consultaId
+      },
+      orderBy: {
+        timestamp: 'asc'
+      }
+    });
+  } catch (error) {
+    console.error(`Erro ao buscar mensagens para consulta ${consultaId}:`, error);
+    throw new Error(`Falha ao buscar mensagens: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
 }
 
-export async function createMensagem(mensagem: Omit<Mensagem, "id" | "timestamp">) {
-  const result = await sql`
-    INSERT INTO mensagens (consulta_id, role, content, category) 
-    VALUES (${mensagem.consulta_id}, ${mensagem.role}, ${mensagem.content}, ${mensagem.category || null}) 
-    RETURNING *
-  `
-  return result[0]
+/**
+ * Cria uma nova mensagem associada a uma consulta
+ * @param data Dados da mensagem
+ * @returns Mensagem criada
+ */
+export async function createMensagem(data: {
+  consulta_id: number;
+  role: string;
+  content: string;
+  category?: string;
+}) {
+  try {
+    // Atualiza o timestamp da consulta ao criar uma mensagem
+    await prisma.consulta.update({
+      where: { id: data.consulta_id },
+      data: { updated_at: new Date() }
+    });
+    
+    return await prisma.mensagem.create({
+      data
+    });
+  } catch (error) {
+    console.error("Erro ao criar mensagem:", error);
+    throw new Error(`Falha ao criar mensagem: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
 }
 
-// Função para obter consultas recentes
-export async function getConsultasRecentes() {
-  return sql`
-    SELECT c.*, p.nome as nome_paciente 
-    FROM consultas c 
-    JOIN pacientes p ON c.paciente_id = p.id 
-    ORDER BY c.data_consulta DESC 
-    LIMIT 5
-  `
+/**
+ * Recupera o diagnóstico formatado para uma consulta
+ * @param consultaId ID da consulta
+ * @returns Objeto de diagnóstico formatado ou null se não encontrado
+ */
+export async function getDiagnosticoByConsultaId(consultaId: number) {
+  try {
+    const consulta = await prisma.consulta.findUnique({
+      where: { id: consultaId }
+    });
+
+    if (!consulta || !consulta.diagnostico_principal) {
+      return null;
+    }
+
+    return {
+      diagnosticoPrincipal: {
+        nome: consulta.diagnostico_principal,
+        descricao: consulta.diagnosticos_diferenciais?.[0]?.descricao || ''
+      },
+      diagnosticosDiferenciais: consulta.diagnosticos_diferenciais || [],
+      evidencias: consulta.evidencias || {
+        sintomas: [],
+        exameFisico: [],
+        examesComplementares: []
+      },
+      recomendacoes: consulta.recomendacoes || {
+        tratamentoFarmacologico: [],
+        tratamentoNaoFarmacologico: [],
+        acompanhamento: []
+      },
+      examesAdicionais: consulta.exames_adicionais || []
+    };
+  } catch (error) {
+    console.error(`Erro ao buscar diagnóstico para consulta ${consultaId}:`, error);
+    throw new Error(`Falha ao buscar diagnóstico: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+  }
 }
+
+export default prisma;
